@@ -1,0 +1,6 @@
+hyperopt
+numpy
+pandas
+prefect
+scipy
+sportsreference
