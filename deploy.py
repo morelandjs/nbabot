@@ -348,6 +348,6 @@ with Flow('deploy nba model predictions') as flow:
 
 if __name__ == '__main__':
 
-    # flow.register(project_name='nflbot')
+    flow.register(project_name='nflbot')
 
-    flow.run(current_season=2020)
+    # flow.run(current_season=2020)
