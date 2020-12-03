@@ -244,10 +244,10 @@ def rank(spread_model, total_model, datetime):
 
     print(report)
 
-    # requests.post(
-    #     os.getenv('SLACK_WEBHOOK'),
-    #     data=json.dumps({'text': report}),
-    #     headers={'Content-Type': 'application/json'})
+    requests.post(
+        os.getenv('SLACK_WEBHOOK'),
+        data=json.dumps({'text': report}),
+        headers={'Content-Type': 'application/json'})
 
 
 @task
@@ -313,21 +313,20 @@ def forecast(spread_model, total_model, games):
 
     print(report)
 
-    # requests.post(
-    #     os.getenv('SLACK_WEBHOOK'),
-    #     data=json.dumps({'text': report}),
-    #     headers={'Content-Type': 'application/json'})
+    requests.post(
+        os.getenv('SLACK_WEBHOOK'),
+        data=json.dumps({'text': report}),
+        headers={'Content-Type': 'application/json'})
 
 
-# run every Wednesday at 8 am EST
+# run every three days
 schedule = IntervalSchedule(
-    start_date=pendulum.datetime(2020, 12, 2, 8, 0, tz="America/New_York"),
-    interval=datetime.timedelta(days=7),
-    end_date=pendulum.datetime(2021, 2, 3, 8, 0, tz="America/New_York"))
+    start_date=pendulum.datetime(2020, 12, 10, 9, 0, tz="America/New_York"),
+    interval=datetime.timedelta(days=3),
+    end_date=pendulum.datetime(2021, 12, 31, 9, 0, tz="America/New_York"))
 
 
-# with Flow('deploy nba model predictions', schedule) as flow:
-with Flow('deploy nba model predictions') as flow:
+with Flow('deploy nba model predictions', schedule) as flow:
 
     current_season = Parameter('current_season', default=2020)
 
@@ -348,6 +347,6 @@ with Flow('deploy nba model predictions') as flow:
 
 if __name__ == '__main__':
 
-    flow.register(project_name='nflbot')
+    flow.register(project_name='nbabot')
 
     # flow.run(current_season=2020)
