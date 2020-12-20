@@ -18,11 +18,14 @@ import pandas as pd
 import pendulum
 import prefect
 from prefect import Flow, Parameter, task
+from prefect.engine.executors import DaskExecutor
 from prefect.schedules import IntervalSchedule
 from sportsreference.nba.schedule import Schedule as NBASchedule
 from sportsreference.nba.teams import Teams as NBATeams
 
 from model import EloraTeam
+
+import matplotlib.pyplot as plt
 
 
 @task
@@ -69,36 +72,23 @@ def get_season_team(season_team, current_season):
 
     time.sleep(1)  # rate limit requests
 
-    df = NBASchedule(team, season).dataframe
+    df = NBASchedule(team, season).dataframe_extended
 
     df['season'] = season
-    df['team_abbr'] = team
+
+    df['timestamp'] = pd.to_datetime(df.date)
 
     df['team_home'] = np.where(
-        df.location == 'Home', team, df.opponent_abbr)
+        df.winner == 'Home', df.winning_abbr, df.losing_abbr)
+
     df['team_away'] = np.where(
-        df.location == 'Away', team, df.opponent_abbr)
+        df.winner == 'Away', df.winning_abbr, df.losing_abbr)
 
-    df['score_home'] = np.where(
-        df.location == 'Home', df.points_scored, df.points_allowed)
-    df['score_away'] = np.where(
-        df.location == 'Away', df.points_scored, df.points_allowed)
+    df_meta = df[['season', 'timestamp', 'location', 'team_home', 'team_away']]
+    df_home = df.filter(regex='^home_.*', axis=1)
+    df_away = df.filter(regex='^away_.*', axis=1)
 
-    columns = {
-        'datetime': 'date',
-        'season': 'season',
-        'game': 'game',
-        'team_home': 'team_home',
-        'team_away': 'team_away',
-        'score_home': 'score_home',
-        'score_away': 'score_away'}
-
-    df = df[
-        columns.keys()
-    ].rename(
-        columns=columns
-    ).drop_duplicates(
-        subset=['date', 'team_home', 'team_away'])
+    df = pd.concat([df_meta, df_home, df_away], axis=1)
 
     df.to_pickle(cachefile)
 
@@ -198,6 +188,14 @@ def calibrate_model(games, mode, n_trials=100):
     scale = EloraTeam(
         games, mode, kfactor, regress_frac, rest_coeff
     ).residuals_.std()
+
+    residuals = EloraTeam(
+        games, mode, kfactor, regress_frac, rest_coeff
+    ).residuals_
+
+    plt.hist(residuals, bins=100)
+    plt.axvline(0)
+    plt.show()
 
     logger.info(f'using scale = {scale}')
 
@@ -326,27 +324,39 @@ schedule = IntervalSchedule(
     end_date=pendulum.datetime(2021, 12, 31, 9, 0, tz="America/New_York"))
 
 
-with Flow('deploy nba model predictions', schedule) as flow:
+# with Flow('deploy nba model predictions', schedule) as flow:
+with Flow('deploy nba model predictions') as flow:
 
-    current_season = Parameter('current_season', default=2020)
+    current_season = Parameter('current_season', default=2021)
 
     season_team_tuples = iter_product(seasons(current_season), team_names)
 
+    #get_season_team.map(season_team_tuples)
+
+    # TODO modify games to pull home, away boxscore stats as well
+    # ...create a single large dataframe with all stats and games
     games = concatenate_games(season_team_tuples, current_season)
 
-    games = compute_rest_days(games)
+    #games = compute_rest_days(games)
 
-    spread_model = calibrate_model(games, 'spread')
+    #spread_model = calibrate_model(games, 'spread')
 
-    total_model = calibrate_model(games, 'total')
+    # TODO use predicted residuals as new outcome column
 
-    rank(spread_model, total_model, pd.Timestamp.now())
+    # TODO use elora estimator to unfold each boxscore stat
 
-    forecast(spread_model, total_model, upcoming_games(games))
+    # TODO train XGBoost to predict residuals and record XGBooost predicted
+    # residuals in the same parent dataframe
+
+    #total_model = calibrate_model(games, 'total')
+
+    #rank(spread_model, total_model, pd.Timestamp.now())
+
+    #forecast(spread_model, total_model, upcoming_games(games))
 
 
 if __name__ == '__main__':
 
-    flow.register(project_name='nbabot')
+    # flow.register(project_name='nbabot')
 
-    # flow.run(current_season=2020)
+    flow.run(current_season=2020, executor=DaskExecutor())
