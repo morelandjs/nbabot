@@ -19,6 +19,7 @@ import pendulum
 import prefect
 from prefect import Flow, Parameter, task
 from prefect.schedules import IntervalSchedule
+from prefect.run_configs import LocalRun
 from sportsreference.nba.schedule import Schedule as NBASchedule
 from sportsreference.nba.teams import Teams as NBATeams
 
@@ -167,7 +168,7 @@ def compute_rest_days(games):
 
 
 @task
-def calibrate_model(games, mode, n_trials=100):
+def calibrate_model(games, mode, n_trials=100, debug=False):
     """
     Optimizes and returns elora distribution mean parameters.
     """
@@ -189,7 +190,7 @@ def calibrate_model(games, mode, n_trials=100):
         return elora_team.mean_abs_error
 
     study = optuna.create_study()
-    study.optimize(objective, n_trials=n_trials)
+    study.optimize(objective, n_trials=(n_trials if debug is False else 2))
 
     kfactor = study.best_params['kfactor']
     regress_frac = study.best_params['regress_frac']
@@ -206,7 +207,7 @@ def calibrate_model(games, mode, n_trials=100):
 
 
 @task
-def rank(spread_model, total_model, datetime):
+def rank(spread_model, total_model, datetime, debug=False):
     """
     Rank NBA teams at a certain point in time. The rankings are based on all
     available data preceding that moment in time.
@@ -242,12 +243,13 @@ def rank(spread_model, total_model, datetime):
         '```',
         '*against average team on neutral field'])
 
-    print(report)
+    if debug is False:
+        requests.post(
+            os.getenv('SLACK_WEBHOOK'),
+            data=json.dumps({'text': report}),
+            headers={'Content-Type': 'application/json'})
 
-    requests.post(
-        os.getenv('SLACK_WEBHOOK'),
-        data=json.dumps({'text': report}),
-        headers={'Content-Type': 'application/json'})
+    print(report)
 
 
 @task
@@ -265,7 +267,7 @@ def upcoming_games(games, days=7):
 
 
 @task
-def forecast(spread_model, total_model, games):
+def forecast(spread_model, total_model, games, debug=False):
     """
     Forecast outcomes for the list of games specified.
     """
@@ -311,12 +313,13 @@ def forecast(spread_model, total_model, games):
         report.to_string(index=False),
         '```'])
 
-    print(report)
+    if debug is False:
+        requests.post(
+            os.getenv('SLACK_WEBHOOK'),
+            data=json.dumps({'text': report}),
+            headers={'Content-Type': 'application/json'})
 
-    requests.post(
-        os.getenv('SLACK_WEBHOOK'),
-        data=json.dumps({'text': report}),
-        headers={'Content-Type': 'application/json'})
+    print(report)
 
 
 # run every three days
@@ -329,6 +332,7 @@ schedule = IntervalSchedule(
 with Flow('deploy nba model predictions', schedule) as flow:
 
     current_season = Parameter('current_season', default=2020)
+    debug = Parameter('debug', default=False)
 
     season_team_tuples = iter_product(seasons(current_season), team_names)
 
@@ -336,17 +340,27 @@ with Flow('deploy nba model predictions', schedule) as flow:
 
     games = compute_rest_days(games)
 
-    spread_model = calibrate_model(games, 'spread')
+    spread_model = calibrate_model(games, 'spread', debug=debug)
 
-    total_model = calibrate_model(games, 'total')
+    total_model = calibrate_model(games, 'total', debug=debug)
 
-    rank(spread_model, total_model, pd.Timestamp.now())
+    rank(spread_model, total_model, pd.Timestamp.now(), debug=debug)
 
-    forecast(spread_model, total_model, upcoming_games(games))
+    forecast(spread_model, total_model, upcoming_games(games), debug=debug)
+
+flow.run_config = LocalRun(
+    working_dir="/home/morelandjs/nbabot")
 
 
 if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Slack NFL predictions bot')
+
+    parser.add_argument(
+        '--debug', help='run in debug mode', action='store_true')
+    args = parser.parse_args()
+    kwargs = vars(args)
 
     flow.register(project_name='nbabot')
 
-    # flow.run(current_season=2020)
+    # flow.run(current_season=2020, **kwargs)
