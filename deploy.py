@@ -253,15 +253,15 @@ def rank(spread_model, total_model, datetime, debug=False):
 
 
 @task
-def upcoming_games(games, days=7):
+def upcoming_games(games, days=1):
     """
-    Returns a dataframe of games to be played in the upcoming week
+    Returns a dataframe of games to be played today
     """
     upcoming_games = games[
         games.score_home.isnull() & games.score_away.isnull()]
 
     days_ahead = (upcoming_games.date - pd.Timestamp.now()).dt.days
-    upcoming_games = upcoming_games[(0 <= days_ahead) & (days_ahead < days)]
+    upcoming_games = upcoming_games[(0 <= days_ahead) & (days_ahead <= days)]
 
     return upcoming_games.copy()
 
@@ -277,11 +277,10 @@ def forecast(spread_model, total_model, games, debug=False):
         return
 
     season = games.season.unique().item()
-    date_min = games.date.min()
-    date_max = games.date.max()
+    date = games.date.date()
 
     logger = prefect.context.get('logger')
-    logger.info(f"Forecast for season {season}, {date_min}-{date_max}")
+    logger.info(f"Daily forecast: {date}")
 
     report = pd.DataFrame({
         "fav": games.team_away,
@@ -308,7 +307,7 @@ def forecast(spread_model, total_model, games, debug=False):
     report.sort_values('spread', inplace=True)
 
     report = '\n'.join([
-        f'*FORECAST  |  SEASON {season}, {date_min}-{date_max}*\n',
+        f'*DAILY FORECAST: {date}*\n',
         '```',
         report.to_string(index=False),
         '```'])
@@ -322,16 +321,15 @@ def forecast(spread_model, total_model, games, debug=False):
     print(report)
 
 
-# run every three days
+# runs daily
 schedule = IntervalSchedule(
     start_date=pendulum.datetime(2020, 12, 10, 9, 0, tz="America/New_York"),
-    interval=datetime.timedelta(days=3),
+    interval=datetime.timedelta(days=1),
     end_date=pendulum.datetime(2021, 12, 31, 9, 0, tz="America/New_York"))
 
 
 with Flow('deploy nba model predictions', schedule) as flow:
-
-    current_season = Parameter('current_season', default=2020)
+    current_season = Parameter('current_season', default=2021)
     debug = Parameter('debug', default=False)
 
     season_team_tuples = iter_product(seasons(current_season), team_names)
@@ -348,7 +346,7 @@ with Flow('deploy nba model predictions', schedule) as flow:
 
     forecast(spread_model, total_model, upcoming_games(games), debug=debug)
 
-flow.run_config = LocalRun(
+Flow.run_config = LocalRun(
     working_dir="/home/morelandjs/nbabot")
 
 
@@ -363,4 +361,4 @@ if __name__ == '__main__':
 
     flow.register(project_name='nbabot')
 
-    # flow.run(current_season=2020, **kwargs)
+    # flow.run(current_season=2021, **kwargs)
