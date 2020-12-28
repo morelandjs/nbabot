@@ -277,7 +277,7 @@ def forecast(spread_model, total_model, games, debug=False):
         return
 
     season = games.season.unique().item()
-    date = games.date.date()
+    date = datetime.datetime.today().date()
 
     logger = prefect.context.get('logger')
     logger.info(f"Daily forecast: {date}")
@@ -329,6 +329,7 @@ schedule = IntervalSchedule(
 
 
 with Flow('deploy nba model predictions', schedule) as flow:
+
     current_season = Parameter('current_season', default=2021)
     debug = Parameter('debug', default=False)
 
@@ -346,13 +347,13 @@ with Flow('deploy nba model predictions', schedule) as flow:
 
     forecast(spread_model, total_model, upcoming_games(games), debug=debug)
 
-Flow.run_config = LocalRun(
+flow.run_config = LocalRun(
     working_dir="/home/morelandjs/nbabot")
 
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description='Slack NFL predictions bot')
+    parser = argparse.ArgumentParser(description='Slack NBA predictions bot')
 
     parser.add_argument(
         '--debug', help='run in debug mode', action='store_true')
