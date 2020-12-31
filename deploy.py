@@ -253,15 +253,17 @@ def rank(spread_model, total_model, datetime, debug=False):
 
 
 @task
-def upcoming_games(games, days=1):
+def upcoming_games(games, seconds=86400):
     """
     Returns a dataframe of games to be played today
     """
     upcoming_games = games[
         games.score_home.isnull() & games.score_away.isnull()]
 
-    days_ahead = (upcoming_games.date - pd.Timestamp.now()).dt.days
-    upcoming_games = upcoming_games[(0 <= days_ahead) & (days_ahead <= days)]
+    seconds_ahead = (upcoming_games.date - pd.Timestamp.now()).dt.seconds
+
+    upcoming_games = upcoming_games[
+            (0 <= seconds_ahead) & (seconds_ahead <= seconds)]
 
     return upcoming_games.copy()
 
