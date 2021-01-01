@@ -253,17 +253,15 @@ def rank(spread_model, total_model, datetime, debug=False):
 
 
 @task
-def upcoming_games(games, seconds=86400):
+def todays_games(games):
     """
     Returns a dataframe of games to be played today
     """
     upcoming_games = games[
         games.score_home.isnull() & games.score_away.isnull()]
 
-    seconds_ahead = (upcoming_games.date - pd.Timestamp.now()).dt.seconds
-
     upcoming_games = upcoming_games[
-            (0 <= seconds_ahead) & (seconds_ahead <= seconds)]
+            upcoming_games.date.dt.date == pd.to_datetime('today').date()]
 
     return upcoming_games.copy()
 
@@ -347,7 +345,7 @@ with Flow('deploy nba model predictions', schedule) as flow:
 
     rank(spread_model, total_model, pd.Timestamp.now(), debug=debug)
 
-    forecast(spread_model, total_model, upcoming_games(games), debug=debug)
+    forecast(spread_model, total_model, todays_games(games), debug=debug)
 
 flow.run_config = LocalRun(
     working_dir="/home/morelandjs/nbabot")
