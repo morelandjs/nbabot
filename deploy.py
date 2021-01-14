@@ -128,6 +128,11 @@ def concatenate_games(season_team_tuples, current_season):
         by=['date', 'team_away', 'team_home']
     ).reset_index(drop=True)
 
+    df.sort_values(by='date', inplace=True)
+
+    logger = prefect.context.get('logger')
+    logger.info('recent games: \n{}'.format(df.dropna().tail(20)))
+
     return df
 
 
@@ -234,10 +239,9 @@ def rank(spread_model, total_model, datetime, debug=False):
     rankings.index += 1
 
     rankings.index.name = 'rank'
-    timestamp = datetime.floor('Min')
 
     report = '\n'.join([
-        f'*RANKING  |  @{timestamp}*\n',
+        f'*RANKING  |  @{datetime}*\n',
         '```',
         rankings.to_string(header=True, justify='left'),
         '```',
