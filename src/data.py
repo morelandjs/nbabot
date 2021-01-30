@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Source latest NBA game data and store in a sqlite database"""
+""" Source latest NBA game data and store in a sqlite database """
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pendulum
 import prefect
 from prefect import Flow, Parameter, task
 from prefect.schedules import IntervalSchedule
@@ -15,7 +14,9 @@ from sportsipy.nba.schedule import Schedule
 from sportsipy.nba.nba_utils import _retrieve_all_teams
 import sqlalchemy
 
-db_path = Path('~/.local/share/sportsref/nba.db').expanduser()
+from . import cachedir
+
+db_path = cachedir / 'nba.db'
 db_path.parent.mkdir(parents=True, exist_ok=True)
 
 
@@ -57,6 +58,10 @@ def initialize_database():
             away_offensive_rebound_percentage      REAL,
             away_offensive_rebounds                BIGINT,
             away_personal_fouls                    BIGINT,
+            away_points_q1                         BIGINT,
+            away_points_q2                         BIGINT,
+            away_points_q3                         BIGINT,
+            away_points_q4                         BIGINT,
             away_points                            BIGINT,
             away_steal_percentage                  REAL,
             away_steals                            BIGINT,
@@ -94,6 +99,10 @@ def initialize_database():
             home_offensive_rebound_percentage      REAL,
             home_offensive_rebounds                BIGINT,
             home_personal_fouls                    BIGINT,
+            home_points_q1                         BIGINT,
+            home_points_q2                         BIGINT,
+            home_points_q3                         BIGINT,
+            home_points_q4                         BIGINT,
             home_points                            BIGINT,
             home_steal_percentage                  REAL,
             home_steals                            BIGINT,
@@ -153,6 +162,10 @@ def update_schedules(engine, current_season, start_season=2002):
             df['team_home'] = team
             df['team_away'] = df.opponent_abbr
             df['season'] = season
+            df['time'] = (df.time + 'm').str.upper()
+            df['datetime'] = pd.to_datetime(
+                df.datetime.astype(str).str.cat(df.time, sep=' '),
+                format='%Y-%m-%d %I:%M%p')
 
             cols = [
                 'boxscore_index',
@@ -164,16 +177,16 @@ def update_schedules(engine, current_season, start_season=2002):
             df[cols].to_sql(
                 'schedule', engine, if_exists='append', index=False)
 
-    date_text = pd.read_sql(
-        'SELECT date FROM games', engine
-    ).squeeze()
+    date_text = pd.read_sql("SELECT date FROM games", engine).squeeze()
 
-    max_date = pd.to_datetime(date_text, format='%H:%M %p, %B %d, %Y').max()
+    max_date = max(
+        pd.to_datetime(date_text, format='%I:%M %p, %B %d, %Y'),
+        default=datetime(2000, 1, 1))
 
     boxscore_ids = pd.read_sql(
         f"""SELECT DISTINCT boxscore_index FROM schedule
         WHERE ('{max_date}' < datetime) AND (datetime < '{datetime.now()}')
-        ORDER BY datetime""", engine).squeeze()
+        ORDER BY datetime""", engine)
 
     return boxscore_ids
 
@@ -186,18 +199,25 @@ def update_boxscores(engine, boxscore_ids):
 
     for boxscore_id in boxscore_ids.values:
         logger.info(f'syncing {boxscore_id}')
-        try:
-            boxscore = Boxscore(boxscore_id)
-            boxscore.dataframe.to_sql(
-                'games', engine, if_exists='append', index=False)
-        except sqlalchemy.exc.IntegrityError:
-            logger.info(f'{boxscore_id} already stored in database')
-            continue
-        except AttributeError:
-            continue
+        boxscore = Boxscore(boxscore_id)
+
+        df = boxscore.dataframe
+        summary = boxscore.summary
+
+        if (df is not None and summary is not None):
+            try:
+                away_qtrs, home_qtrs = [[
+                    f'{tm}_points_q{k}' for k in [1, 2, 3, 4]
+                ] for tm in ['away', 'home']]
+                df[away_qtrs] = summary['away'][:4]
+                df[home_qtrs] = summary['home'][:4]
+                df.to_sql('games', engine, if_exists='append', index=False)
+            except sqlalchemy.exc.IntegrityError:
+                logger.info(f'{boxscore_id} already stored in database')
+                continue
 
 
-def upcoming_games(days=2):
+def upcoming_games(days=1):
     """Return a pandas dataframe of upcoming games
     """
     engine = sqlalchemy.create_engine(f'sqlite:///{db_path.expanduser()}')
@@ -227,7 +247,15 @@ def preprocess_data():
             winning_abbr,
             winner,
             home_points,
-            away_points
+            home_points_q1,
+            home_points_q2,
+            home_points_q3,
+            home_points_q4,
+            away_points,
+            away_points_q1,
+            away_points_q2,
+            away_points_q3,
+            away_points_q4
             FROM games""", engine)
 
     df['date'] = pd.to_datetime(df.date, format='%H:%M %p, %B %d, %Y')
@@ -238,10 +266,10 @@ def preprocess_data():
     df['team_away'] = np.where(
         df.winner == 'Away', df.winning_abbr, df.losing_abbr)
 
+    df['home_points_1h'] = df.home_points_q1 + df.home_points_q2
+    df['away_points_1h'] = df.away_points_q1 + df.away_points_q2
+
     return df
-
-
-games = preprocess_data()
 
 
 if __name__ == '__main__':
@@ -258,9 +286,9 @@ if __name__ == '__main__':
     tz = 'America/New_York'
 
     schedule = IntervalSchedule(
-        start_date=pendulum.datetime(2020, 12, 2, 8, 0, tz=tz),
+        start_date=datetime(2020, 12, 2, 8, 0),
         interval=timedelta(days=7),
-        end_date=pendulum.datetime(2021, 2, 3, 8, 0, tz=tz))
+        end_date=datetime(2021, 2, 3, 8, 0))
 
     with Flow('update NBA game data', schedule=schedule) as flow:
         current_season = Parameter('current_season', default=2021)
@@ -274,5 +302,3 @@ if __name__ == '__main__':
         flow.register(project_name='nbabot')
 
     flow.run(current_season=2021, run_on_schedule=args.schedule)
-
-    print(games)

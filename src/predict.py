@@ -4,11 +4,10 @@ import json
 import os
 import requests
 
-import numpy as np
 import pandas as pd
 
-from model import EloraNBA
-from data import upcoming_games
+from .model import EloraNBA
+from .data import preprocess_data, upcoming_games
 
 
 def rank(spread_model, total_model, datetime, slack_report=False):
@@ -57,9 +56,8 @@ def forecast(spread_model, total_model, games, slack_report=False):
     """
     games = upcoming_games()
 
-    season = np.squeeze(games.season.unique())
-
     report = pd.DataFrame({
+        "date": games.datetime,
         "fav": games.team_away,
         "und": "@" + games.team_home,
         "odds": spread_model.sf(
@@ -83,8 +81,9 @@ def forecast(spread_model, total_model, games, slack_report=False):
     report.drop(columns="one minus odds", inplace=True)
     report.sort_values('spread', inplace=True)
 
+    timestamp = pd.Timestamp('now')
     report = '\n'.join([
-        f'*FORECAST  |  SEASON {season}*\n',
+        f'*FORECAST  |  @{timestamp}*\n',
         '```',
         report.to_string(index=False),
         '```'])
@@ -100,7 +99,6 @@ def forecast(spread_model, total_model, games, slack_report=False):
 
 if __name__ == '__main__':
     import argparse
-    from data import games
 
     parser = argparse.ArgumentParser(description='NBA prediction model')
 
@@ -129,6 +127,7 @@ if __name__ == '__main__':
     kwargs = vars(args)
     subparser = kwargs.pop('subparser')
 
+    games = preprocess_data()
     spread_model = EloraNBA.from_cache(games, 'spread')
     total_model = EloraNBA.from_cache(games, 'total')
 
@@ -136,7 +135,7 @@ if __name__ == '__main__':
         rank(spread_model, total_model, args.time,
              slack_report=args.slack_report)
     elif subparser == 'forecast':
-        games = upcoming_games(days=7)
+        games = upcoming_games(days=1)
         forecast(spread_model, total_model, games,
                  slack_report=args.slack_report)
     else:

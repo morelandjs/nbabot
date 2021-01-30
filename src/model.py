@@ -10,6 +10,8 @@ import numpy as np
 import optuna
 import pandas as pd
 
+from . import cachedir
+
 
 class EloraNBA(Elora):
     def __init__(self, games, mode, kfactor, regress_frac, rest_coeff,
@@ -166,7 +168,8 @@ class EloraNBA(Elora):
         """
         games.sort_values(by=['date', 'team_away', 'team_home'], inplace=True)
 
-        games['value'] = self.compare(games.away_points, games.home_points)
+        games['value'] = self.compare(
+            games.away_points_1h, games.home_points_1h)
 
         self.fit(
             games.date,
@@ -217,11 +220,8 @@ class EloraNBA(Elora):
                 available and retrain is False, recalibrate hyperparameters
                 otherwise. default is False.
         """
-        cachefile = Path(
-            f'~/.local/share/elora/elora_nfl_{mode}.pkl'
-        ).expanduser()
-
-        cachefile.parent.mkdir(parents=True, exist_ok=True)
+        cachefile = cachedir / f'{mode}_model.pkl'
+        cachefile.parent.mkdir(exist_ok=True, parents=True)
 
         if not retrain and cachefile.exists():
             params = pickle.load(cachefile.open(mode='rb'))
@@ -264,7 +264,7 @@ if __name__ == '__main__':
     """Minimal example of how to use this module
     """
     import argparse
-    from data import games
+    from .data import preprocess_data
 
     parser = argparse.ArgumentParser(description='calibrate hyperparameters')
 
@@ -273,6 +273,8 @@ if __name__ == '__main__':
         help='number of Optuna calibration steps')
 
     args = parser.parse_args()
+
+    games = preprocess_data()
 
     for mode in ['spread', 'total']:
         EloraNBA.from_cache(games, mode, n_trials=args.steps, retrain=True)
