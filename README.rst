@@ -1,7 +1,7 @@
-NBA Slack Bot
-=============
+NBA model
+=========
 
-*Deploys a continually updated NFL prediction model*
+*Framework to calibrate an Elo regressor on NBA boxscore data*
 
 Quick start
 -----------
@@ -14,7 +14,7 @@ Populate the sqlite database with NBA schedule and boxscore data ::
 
   python3 -m src.data
 
-Train the `elora` regressor on the specified statistic, e.g. first-half line ::
+Train the ``elora`` regressor on the specified statistic, e.g. first-half line ::
 
   python3 -m src.model
 
@@ -27,4 +27,4 @@ Generate model predictions using the calibrated model ::
   python3 -m src.predict rank
   python3 -m src.predict forecast
 
-See `python3 -m src.predict --help` for options and details!
+See ``python3 -m src.predict --help`` for options and details!
