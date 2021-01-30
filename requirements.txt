@@ -1,4 +1,5 @@
 elora @ git+https://github.com/morelandjs/elora.git@master
+matplotlib
 numpy
 optuna
 pandas
