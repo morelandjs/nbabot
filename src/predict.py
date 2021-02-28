@@ -97,6 +97,13 @@ def forecast(spread_model, total_model, games, slack_report=False):
     print(report)
 
 
+def bet(spread_model, total_model, games):
+    """Quantify the expected profit (or losses) incurred by betting
+    on either side of each game
+    """
+    # TODO implement this
+
+
 if __name__ == '__main__':
     import argparse
 
@@ -138,5 +145,7 @@ if __name__ == '__main__':
         games = upcoming_games(days=1)
         forecast(spread_model, total_model, games,
                  slack_report=args.slack_report)
+    elif subparser == 'bet':
+        # TODO implement this
     else:
         raise(ValueError, 'No such argument {}'.format(subparser))

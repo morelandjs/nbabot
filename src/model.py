@@ -14,37 +14,40 @@ from . import cachedir
 
 
 class EloraNBA(Elora):
-    def __init__(self, games, mode, kfactor, regress_frac, rest_coeff,
-                 scale=1, burnin=1260):
+    def __init__(self, games, mode, learning_rate, regress_frac, rest_coeff,
+                 burnin=1260):
         """Generate NBA point-spread or point-total predictions using the Elo
         regressor algorithm (elora).
 
         Args:
             games (pd.DataFrame): pandas dataframe containing comparisons
-                (date, team_home, team_away, away_points, home_points).
+                (datetime, team_home, team_away, *feat_home, *feature_away).
             mode (str): comparison type, equal to 'spread' or 'total'.
-            kfactor (float): Elo hidden rating update factor
+            learning_rate (float): gradient descent learning rate
             regress_frac (float): one minus the fractional amount used to
                 regress ratings to the mean each offseason
             rest_coeff (float): prefactor that modulates the strength of rest
                 effects, i.e. how much better/worse a team plays as a function
                 of days between games. values can be positive or negative.
-            scale (float, optional): standard deviation of the elora regressor
-                predictions. default value is 1.
             burnin (int, optional): number of games to ignore from the
                 beginning of the games dataframe when computing performance
                 metrics. default is 512.
         """
 
         # training data
-        self.games = games
+        self.games = games.sort_values(
+            by=['datetime', 'team_home', 'team_away']).dropna()
+
+        # NOTE: for debugging only
+        self.games.drop(columns=[
+            'mf_ast_home', 'mf_tov_home', 'mf_trb_home',
+            'mf_ast_away', 'mf_tov_away', 'mf_trb_away'], inplace=True)
 
         # hyperparameters
         self.mode = mode
-        self.kfactor = kfactor
+        self.learning_rate = learning_rate
         self.regress_frac = regress_frac
         self.rest_coeff = rest_coeff
-        self.scale = scale
         self.burnin = burnin
 
         # model operation mode: "spread" or "total"
@@ -58,33 +61,29 @@ class EloraNBA(Elora):
             "spread": (False, operator.sub),
         }[mode]
 
+        # prepare model training data
+        mf_home = self.games.filter(regex='^mf.*_home$', axis=1)
+        mf_away = self.games.filter(regex='^mf.*_away$', axis=1)
+        mf_home.columns = mf_home.columns.str.replace('_home', '')
+        mf_away.columns = mf_away.columns.str.replace('_away', '')
+
         # initialize base class with chosen hyperparameters
         super().__init__(
-            self.kfactor,
-            scale=self.scale,
-            commutes=self.commutes)
+            self.games.datetime,
+            self.games.team_home,
+            self.games.team_away,
+            self.compare(mf_home, mf_away),
+            self.bias(self.games))
 
-        # train the model
-        self.train(games)
+        # calibrate the model
+        self.fit(self.learning_rate, self.commutes)
 
         # compute performance metrics
-        self.residuals_ = self.residuals(standardize=False)
+        self.residuals_ = self.residuals()[:, 0]
         self.mean_abs_error = np.mean(np.abs(self.residuals_[burnin:]))
         self.rms_error = np.sqrt(np.mean(self.residuals_[burnin:]**2))
-
-        # components for binary cross entropy loss
-        tiny = 1e-5
-        yp = np.clip(
-            self.pdf(
-                self.examples.value,
-                self.examples.time,
-                self.examples.label1,
-                self.examples.label2,
-                self.examples.bias),
-            tiny, 1 - tiny)
-
-        # binary cross entropy loss
-        self.log_loss = -np.log(yp).mean()
+        print(np.mean(self.residuals_))
+        print(self.mean_abs_error)
 
     def regression_coeff(self, elapsed_time):
         """Regress ratings to the mean as a function of elapsed time.
@@ -117,32 +116,32 @@ class EloraNBA(Elora):
             pd.DataFrame including rest day columns
         """
         game_dates = pd.concat([
-            games[["date", "team_home"]].rename(
+            games[["datetime", "team_home"]].rename(
                 columns={"team_home": "team"}),
-            games[["date", "team_away"]].rename(
+            games[["datetime", "team_away"]].rename(
                 columns={"team_away": "team"}),
-        ]).sort_values(by="date")
+        ]).sort_values(by="datetime")
 
-        game_dates['date_prev'] = game_dates.date
+        game_dates['datetime_prev'] = game_dates.datetime
 
         game_dates = pd.merge_asof(
-            game_dates[['team', 'date']],
-            game_dates[['team', 'date', 'date_prev']],
-            on='date', by='team', allow_exact_matches=False)
+            game_dates[['team', 'datetime']],
+            game_dates[['team', 'datetime', 'datetime_prev']],
+            on='datetime', by='team', allow_exact_matches=False)
 
         for team in ["home", "away"]:
             game_dates_team = game_dates.rename(columns={
-                'date_prev': f'date_{team}_prev', 'team': f'team_{team}'})
-            games = games.merge(game_dates_team, on=['date', f'team_{team}'])
+                'datetime_prev': f'datetime_{team}_prev', 'team': f'team_{team}'})
+            games = games.merge(game_dates_team, on=['datetime', f'team_{team}'])
 
         one_day = pd.Timedelta("1 days")
 
         games["rest_days_home"] = np.clip(
-            (games.date - games.date_home_prev) / one_day, 3, 16).fillna(7)
+            (games.datetime - games.datetime_home_prev) / one_day, 3, 16).fillna(7)
         games["rest_days_away"] = np.clip(
-            (games.date - games.date_away_prev) / one_day, 3, 16).fillna(7)
+            (games.datetime - games.datetime_away_prev) / one_day, 3, 16).fillna(7)
 
-        return games.drop(columns=['date_home_prev', 'date_away_prev'])
+        return games.drop(columns=['datetime_home_prev', 'datetime_away_prev'])
 
     def bias(self, games):
         """Circumstantial bias factors which apply to a single game.
@@ -159,52 +158,6 @@ class EloraNBA(Elora):
             games.rest_days_away, games.rest_days_home)
 
         return rest_adv
-
-    def train(self, games):
-        """Conditions the regressor on provided game data.
-
-        Args:
-            games (pd.DataFrame): dataframe of NBA game records
-        """
-        games.sort_values(by=['date', 'team_away', 'team_home'], inplace=True)
-
-        games['value'] = self.compare(
-            games.away_points_1h, games.home_points_1h)
-
-        self.fit(
-            games.date,
-            games.team_away,
-            games.team_home,
-            games.value,
-            biases=self.bias(games))
-
-    def rank(self, time, order_by='mean', reverse=False):
-        """Rank labels at specified 'time' according to 'order_by'
-        comparison value.
-
-        Args:
-            time (np.datetime64): time to compute the ranking
-            order_by (string, optional): options are 'mean' and 'win_prob'
-                (default is 'mean')
-            reverse (bool, optional): reverses the ranking order if true
-                (default is False)
-
-        Returns:
-            ranked_labels (list of tuple): list of (label, value) pairs
-        """
-        value = {
-            "win prob": partial(self.sf, 0),
-            "mean": self.mean,
-         }.get(order_by, None)
-
-        if value is None:
-            raise ValueError("no such comparison function")
-
-        ranked_list = [
-            (label, value(time, label, None, biases=-self.commutator))
-            for label in self.labels]
-
-        return sorted(ranked_list, key=lambda v: v[1], reverse=reverse)
 
     @classmethod
     def from_cache(cls, games, mode, n_trials=100, retrain=False):
@@ -225,46 +178,35 @@ class EloraNBA(Elora):
 
         if not retrain and cachefile.exists():
             params = pickle.load(cachefile.open(mode='rb'))
-            kfactor = params['kfactor']
+            learning_rate = params['learning_rate']
             regress_frac = params['regress_frac']
             rest_coeff = params['rest_coeff']
-            scale = params['scale']
-            return cls(games, mode, kfactor, regress_frac, rest_coeff, scale)
+            return cls(games, mode, learning_rate, regress_frac, rest_coeff)
 
         def objective(trial):
             """hyperparameter objective function
             """
-            kfactor = trial.suggest_loguniform('kfactor', 0.01, 0.1)
+            learning_rate = trial.suggest_loguniform('learning_rate', 0.001, 0.1)
             regress_frac = trial.suggest_uniform('regress_frac', 0.0, 1.0)
-            rest_coeff = trial.suggest_uniform('rest_coeff', -0.5, 0.5)
-            regressor = cls(games, mode, kfactor, regress_frac, rest_coeff)
+            rest_coeff = trial.suggest_uniform('rest_coeff', -0.2, 0.2)
+            regressor = cls(games, mode, learning_rate, regress_frac, rest_coeff)
             return regressor.mean_abs_error
 
         study = optuna.create_study()
         study.optimize(objective, n_trials=n_trials)
 
         params = study.best_params.copy()
-        kfactor = params['kfactor']
-        regress_frac = params['regress_frac']
-        rest_coeff = params['rest_coeff']
-
-        residuals = cls(
-            games, mode, kfactor, regress_frac, rest_coeff
-        ).residuals()
-
-        scale = residuals.std()
-        params.update({'scale': scale})
 
         pickle.dump(params, cachefile.open(mode='wb'))
 
-        return cls(games, mode, kfactor, regress_frac, rest_coeff, scale)
+        return cls(games, mode, *params.values())
 
 
 if __name__ == '__main__':
     """Minimal example of how to use this module
     """
     import argparse
-    from .data import preprocess_data
+    from .data import games
 
     parser = argparse.ArgumentParser(description='calibrate hyperparameters')
 
@@ -273,8 +215,6 @@ if __name__ == '__main__':
         help='number of Optuna calibration steps')
 
     args = parser.parse_args()
-
-    games = preprocess_data()
 
     for mode in ['spread', 'total']:
         EloraNBA.from_cache(games, mode, n_trials=args.steps, retrain=True)
