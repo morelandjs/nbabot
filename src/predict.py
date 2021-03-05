@@ -7,7 +7,7 @@ import requests
 import pandas as pd
 
 from .model import EloraNBA
-from .data import preprocess_data, upcoming_games
+from .data import games, upcoming_games
 
 
 def rank(spread_model, total_model, datetime, slack_report=False):
@@ -15,15 +15,17 @@ def rank(spread_model, total_model, datetime, slack_report=False):
     available data preceding that moment in time.
     """
     df = pd.DataFrame(
-        spread_model.rank(datetime, order_by='mean', reverse=True),
-        columns=['team', 'point spread'])
+        spread_model.ratings(datetime),
+        columns=['team', 'point spread']
+    ).sort_values(by='point spread', ascending=False).reset_index(drop=True)
 
     df['point spread'] = df[['point spread']].applymap('{:4.1f}'.format)
     spread_col = '  ' + df['team'] + '  ' + df['point spread']
 
     df = pd.DataFrame(
-        total_model.rank(datetime, order_by='mean', reverse=True),
-        columns=['team', 'point total'])
+        total_model.ratings(datetime),
+        columns=['team', 'point total']
+    ).sort_values(by='point total', ascending=False).reset_index(drop=True)
 
     df['point total'] = df[['point total']].applymap('{:4.1f}'.format)
     total_col = '  ' + df['team'] + '  ' + df['point total']
@@ -134,7 +136,6 @@ if __name__ == '__main__':
     kwargs = vars(args)
     subparser = kwargs.pop('subparser')
 
-    games = preprocess_data()
     spread_model = EloraNBA.from_cache(games, 'spread')
     total_model = EloraNBA.from_cache(games, 'total')
 
@@ -145,7 +146,7 @@ if __name__ == '__main__':
         games = upcoming_games(days=1)
         forecast(spread_model, total_model, games,
                  slack_report=args.slack_report)
-    elif subparser == 'bet':
-        # TODO implement this
+    #elif subparser == 'bet':
+    #    # TODO implement this
     else:
         raise(ValueError, 'No such argument {}'.format(subparser))

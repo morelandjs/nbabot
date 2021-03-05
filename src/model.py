@@ -82,8 +82,6 @@ class EloraNBA(Elora):
         self.residuals_ = self.residuals()[:, 0]
         self.mean_abs_error = np.mean(np.abs(self.residuals_[burnin:]))
         self.rms_error = np.sqrt(np.mean(self.residuals_[burnin:]**2))
-        print(np.mean(self.residuals_))
-        print(self.mean_abs_error)
 
     def regression_coeff(self, elapsed_time):
         """Regress ratings to the mean as a function of elapsed time.
