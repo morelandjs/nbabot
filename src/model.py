@@ -21,7 +21,7 @@ class EloraNBA(Elora):
 
         Args:
             games (pd.DataFrame): pandas dataframe containing comparisons
-                (date, team_home, team_away, away_points, home_points).
+                (datetime, team_home, team_away, away_points, home_points).
             mode (str): comparison type, equal to 'spread' or 'total'.
             kfactor (float): Elo hidden rating update factor
             regress_frac (float): one minus the fractional amount used to
@@ -37,7 +37,8 @@ class EloraNBA(Elora):
         """
 
         # training data
-        self.games = games
+        self.games = games.sort_values(
+            by=['datetime', 'team_home', 'team_away']).dropna()
 
         # hyperparameters
         self.mode = mode
@@ -117,32 +118,32 @@ class EloraNBA(Elora):
             pd.DataFrame including rest day columns
         """
         game_dates = pd.concat([
-            games[["date", "team_home"]].rename(
+            games[["datetime", "team_home"]].rename(
                 columns={"team_home": "team"}),
-            games[["date", "team_away"]].rename(
+            games[["datetime", "team_away"]].rename(
                 columns={"team_away": "team"}),
-        ]).sort_values(by="date")
+        ]).sort_values(by="datetime")
 
-        game_dates['date_prev'] = game_dates.date
+        game_dates['datetime_prev'] = game_dates.datetime
 
         game_dates = pd.merge_asof(
-            game_dates[['team', 'date']],
-            game_dates[['team', 'date', 'date_prev']],
-            on='date', by='team', allow_exact_matches=False)
+            game_dates[['team', 'datetime']],
+            game_dates[['team', 'datetime', 'datetime_prev']],
+            on='datetime', by='team', allow_exact_matches=False)
 
         for team in ["home", "away"]:
             game_dates_team = game_dates.rename(columns={
-                'date_prev': f'date_{team}_prev', 'team': f'team_{team}'})
-            games = games.merge(game_dates_team, on=['date', f'team_{team}'])
+                'datetime_prev': f'datetime_{team}_prev', 'team': f'team_{team}'})
+            games = games.merge(game_dates_team, on=['datetime', f'team_{team}'])
 
         one_day = pd.Timedelta("1 days")
 
         games["rest_days_home"] = np.clip(
-            (games.date - games.date_home_prev) / one_day, 3, 16).fillna(7)
+            (games.datetime - games.datetime_home_prev) / one_day, 3, 16).fillna(7)
         games["rest_days_away"] = np.clip(
-            (games.date - games.date_away_prev) / one_day, 3, 16).fillna(7)
+            (games.datetime - games.datetime_away_prev) / one_day, 3, 16).fillna(7)
 
-        return games.drop(columns=['date_home_prev', 'date_away_prev'])
+        return games.drop(columns=['datetime_home_prev', 'datetime_away_prev'])
 
     def bias(self, games):
         """Circumstantial bias factors which apply to a single game.
@@ -166,13 +167,12 @@ class EloraNBA(Elora):
         Args:
             games (pd.DataFrame): dataframe of NBA game records
         """
-        games.sort_values(by=['date', 'team_away', 'team_home'], inplace=True)
+        games.sort_values(by=['datetime', 'team_away', 'team_home'], inplace=True)
 
-        games['value'] = self.compare(
-            games.away_points_1h, games.home_points_1h)
+        games['value'] = self.compare(games.mf_pts_away, games.mf_pts_home)
 
         self.fit(
-            games.date,
+            games.datetime,
             games.team_away,
             games.team_home,
             games.value,
@@ -264,7 +264,7 @@ if __name__ == '__main__':
     """Minimal example of how to use this module
     """
     import argparse
-    from .data import preprocess_data
+    from .data import games, upcoming_games
 
     parser = argparse.ArgumentParser(description='calibrate hyperparameters')
 
@@ -273,8 +273,6 @@ if __name__ == '__main__':
         help='number of Optuna calibration steps')
 
     args = parser.parse_args()
-
-    games = preprocess_data()
 
     for mode in ['spread', 'total']:
         EloraNBA.from_cache(games, mode, n_trials=args.steps, retrain=True)
